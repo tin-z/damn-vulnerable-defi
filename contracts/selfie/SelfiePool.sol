@@ -3,73 +3,56 @@ pragma solidity ^0.8.0;
 
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
-import "@openzeppelin/contracts/interfaces/IERC3156FlashLender.sol";
-import "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 import "./SimpleGovernance.sol";
 
 /**
  * @title SelfiePool
  * @author Damn Vulnerable DeFi (https://damnvulnerabledefi.xyz)
  */
-contract SelfiePool is ReentrancyGuard, IERC3156FlashLender {
+contract SelfiePool is ReentrancyGuard {
 
-    ERC20Snapshot public immutable token;
-    SimpleGovernance public immutable governance;
-    bytes32 private constant CALLBACK_SUCCESS = keccak256("ERC3156FlashBorrower.onFlashLoan");
+    using Address for address;
 
-    error RepayFailed();
-    error CallerNotGovernance();
-    error UnsupportedCurrency();
-    error CallbackFailed();
+    ERC20Snapshot public token;
+    SimpleGovernance public governance;
 
     event FundsDrained(address indexed receiver, uint256 amount);
 
     modifier onlyGovernance() {
-        if (msg.sender != address(governance))
-            revert CallerNotGovernance();
+        require(msg.sender == address(governance), "Only governance can execute this action");
         _;
     }
 
-    constructor(address _token, address _governance) {
-        token = ERC20Snapshot(_token);
-        governance = SimpleGovernance(_governance);
+    constructor(address tokenAddress, address governanceAddress) {
+        token = ERC20Snapshot(tokenAddress);
+        governance = SimpleGovernance(governanceAddress);
     }
 
-    function maxFlashLoan(address _token) external view returns (uint256) {
-        if (address(token) == _token)
-            return token.balanceOf(address(this));
-        return 0;
-    }
-
-    function flashFee(address _token, uint256) external view returns (uint256) {
-        if (address(token) != _token)
-            revert UnsupportedCurrency();
-        return 0;
-    }
-
-    function flashLoan(
-        IERC3156FlashBorrower _receiver,
-        address _token,
-        uint256 _amount,
-        bytes calldata _data
-    ) external nonReentrant returns (bool) {
-        if (_token != address(token))
-            revert UnsupportedCurrency();
-
-        token.transfer(address(_receiver), _amount);
-        if (_receiver.onFlashLoan(msg.sender, _token, _amount, 0, _data) != CALLBACK_SUCCESS)
-            revert CallbackFailed();
-
-        if (!token.transferFrom(address(_receiver), address(this), _amount))
-            revert RepayFailed();
+    function flashLoan(uint256 borrowAmount) external nonReentrant {
+        uint256 balanceBefore = token.balanceOf(address(this));
+        require(balanceBefore >= borrowAmount, "Not enough tokens in pool");
         
-        return true;
+        token.transfer(msg.sender, borrowAmount);        
+        
+        require(msg.sender.isContract(), "Sender must be a deployed contract");
+        msg.sender.functionCall(
+            abi.encodeWithSignature(
+                "receiveTokens(address,uint256)",
+                address(token),
+                borrowAmount
+            )
+        );
+        
+        uint256 balanceAfter = token.balanceOf(address(this));
+
+        require(balanceAfter >= balanceBefore, "Flash loan hasn't been paid back");
     }
 
-    function emergencyExit(address receiver) external onlyGovernance {
+    function drainAllFunds(address receiver) external onlyGovernance {
         uint256 amount = token.balanceOf(address(this));
         token.transfer(receiver, amount);
-
+        
         emit FundsDrained(receiver, amount);
     }
 }

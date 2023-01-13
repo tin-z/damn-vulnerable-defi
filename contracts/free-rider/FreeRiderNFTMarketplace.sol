@@ -10,100 +10,77 @@ import "../DamnValuableNFT.sol";
  * @author Damn Vulnerable DeFi (https://damnvulnerabledefi.xyz)
  */
 contract FreeRiderNFTMarketplace is ReentrancyGuard {
+
     using Address for address payable;
 
     DamnValuableNFT public token;
-    uint256 public offersCount;
+    uint256 public amountOfOffers;
 
     // tokenId -> price
     mapping(uint256 => uint256) private offers;
 
     event NFTOffered(address indexed offerer, uint256 tokenId, uint256 price);
     event NFTBought(address indexed buyer, uint256 tokenId, uint256 price);
+    
+    constructor(uint8 amountToMint) payable {
+        require(amountToMint < 256, "Cannot mint that many tokens");
+        token = new DamnValuableNFT();
 
-    error InvalidPricesAmount();
-    error InvalidTokensAmount();
-    error InvalidPrice();
-    error CallerNotOwner(uint256 tokenId);
-    error InvalidApproval();
-    error TokenNotOffered(uint256 tokenId);
-    error InsufficientPayment();
-
-    constructor(uint256 amount) payable {
-        DamnValuableNFT _token = new DamnValuableNFT();
-        _token.renounceOwnership();
-        for (uint256 i = 0; i < amount; ) {
-            _token.safeMint(msg.sender);
-            unchecked { ++i; }
-        }
-        token = _token;
+        for(uint8 i = 0; i < amountToMint; i++) {
+            token.safeMint(msg.sender);
+        }        
     }
 
     function offerMany(uint256[] calldata tokenIds, uint256[] calldata prices) external nonReentrant {
-        uint256 amount = tokenIds.length;
-        if (amount == 0)
-            revert InvalidTokensAmount();
-            
-        if (amount != prices.length)
-            revert InvalidPricesAmount();
-
-        for (uint256 i = 0; i < amount;) {
-            unchecked {
-                _offerOne(tokenIds[i], prices[i]);
-                ++i;
-            }
+        require(tokenIds.length > 0 && tokenIds.length == prices.length);
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _offerOne(tokenIds[i], prices[i]);
         }
     }
 
     function _offerOne(uint256 tokenId, uint256 price) private {
-        DamnValuableNFT _token = token; // gas savings
+        require(price > 0, "Price must be greater than zero");
 
-        if (price == 0)
-            revert InvalidPrice();
+        require(
+            msg.sender == token.ownerOf(tokenId),
+            "Account offering must be the owner"
+        );
 
-        if (msg.sender != _token.ownerOf(tokenId))
-            revert CallerNotOwner(tokenId);
-
-        if (_token.getApproved(tokenId) != address(this) && !_token.isApprovedForAll(msg.sender, address(this)))
-            revert InvalidApproval();
+        require(
+            token.getApproved(tokenId) == address(this) ||
+            token.isApprovedForAll(msg.sender, address(this)),
+            "Account offering must have approved transfer"
+        );
 
         offers[tokenId] = price;
 
-        assembly { // gas savings
-            sstore(0x02, add(sload(0x02), 0x01))
-        }
+        amountOfOffers++;
 
         emit NFTOffered(msg.sender, tokenId, price);
     }
 
     function buyMany(uint256[] calldata tokenIds) external payable nonReentrant {
-        for (uint256 i = 0; i < tokenIds.length;) {
-            unchecked {
-                _buyOne(tokenIds[i]);
-                ++i;
-            }
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            _buyOne(tokenIds[i]);
         }
     }
 
-    function _buyOne(uint256 tokenId) private {
+    function _buyOne(uint256 tokenId) private {       
         uint256 priceToPay = offers[tokenId];
-        if (priceToPay == 0)
-            revert TokenNotOffered(tokenId);
+        require(priceToPay > 0, "Token is not being offered");
 
-        if (msg.value < priceToPay)
-            revert InsufficientPayment();
+        require(msg.value >= priceToPay, "Amount paid is not enough");
 
-        --offersCount;
+        amountOfOffers--;
 
         // transfer from seller to buyer
-        DamnValuableNFT _token = token; // cache for gas savings
-        _token.safeTransferFrom(_token.ownerOf(tokenId), msg.sender, tokenId);
+        token.safeTransferFrom(token.ownerOf(tokenId), msg.sender, tokenId);
 
-        // pay seller using cached token
-        payable(_token.ownerOf(tokenId)).sendValue(priceToPay);
+        // pay seller
+        payable(token.ownerOf(tokenId)).sendValue(priceToPay);
 
         emit NFTBought(msg.sender, tokenId, priceToPay);
-    }
+    }    
 
     receive() external payable {}
 }

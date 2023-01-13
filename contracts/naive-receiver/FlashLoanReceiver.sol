@@ -2,58 +2,38 @@
 
 pragma solidity ^0.8.0;
 
-import "solady/src/utils/SafeTransferLib.sol";
-import "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
-import "./NaiveReceiverLenderPool.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 
 /**
  * @title FlashLoanReceiver
  * @author Damn Vulnerable DeFi (https://damnvulnerabledefi.xyz)
  */
-contract FlashLoanReceiver is IERC3156FlashBorrower {
+contract FlashLoanReceiver {
+    using Address for address payable;
 
-    address private pool;
-    address private constant ETH = 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
+    address payable private pool;
 
-    error UnsupportedCurrency();
-
-    constructor(address _pool) {
-        pool = _pool;
+    constructor(address payable poolAddress) {
+        pool = poolAddress;
     }
 
-    function onFlashLoan(
-        address,
-        address token,
-        uint256 amount,
-        uint256 fee,
-        bytes calldata
-    ) external returns (bytes32) {
-        assembly { // gas savings
-            if iszero(eq(sload(pool.slot), caller())) {
-                mstore(0x00, 0x48f5c3ed)
-                revert(0x1c, 0x04)
-            }
-        }
-        
-        if (token != ETH)
-            revert UnsupportedCurrency();
-        
-        uint256 amountToBeRepaid;
-        unchecked {
-            amountToBeRepaid = amount + fee;
-        }
+    // Function called by the pool during flash loan
+    function receiveEther(uint256 fee) public payable {
+        require(msg.sender == pool, "Sender must be pool");
 
+        uint256 amountToBeRepaid = msg.value + fee;
+
+        require(address(this).balance >= amountToBeRepaid, "Cannot borrow that much");
+        
         _executeActionDuringFlashLoan();
-
+        
         // Return funds to pool
-        SafeTransferLib.safeTransferETH(pool, amountToBeRepaid);
-
-        return keccak256("ERC3156FlashBorrower.onFlashLoan");
+        pool.sendValue(amountToBeRepaid);
     }
 
-    // Internal function where the funds received would be used
+    // Internal function where the funds received are used
     function _executeActionDuringFlashLoan() internal { }
 
     // Allow deposits of ETH
-    receive() external payable {}
+    receive () external payable {}
 }

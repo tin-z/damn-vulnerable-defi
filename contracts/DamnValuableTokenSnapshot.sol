@@ -9,22 +9,23 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Snapshot.sol";
  * @author Damn Vulnerable DeFi (https://damnvulnerabledefi.xyz)
  */
 contract DamnValuableTokenSnapshot is ERC20Snapshot {
-    uint256 private _lastSnapshotId;
+    
+    uint256 private lastSnapshotId;
 
     constructor(uint256 initialSupply) ERC20("DamnValuableToken", "DVT") {
         _mint(msg.sender, initialSupply);
     }
 
-    function snapshot() public returns (uint256 lastSnapshotId) {
+    function snapshot() public returns (uint256) {
         lastSnapshotId = _snapshot();
-        _lastSnapshotId = lastSnapshotId;
+        return lastSnapshotId;
     }
 
     function getBalanceAtLastSnapshot(address account) external view returns (uint256) {
-        return balanceOfAt(account, _lastSnapshotId);
+        return balanceOfAt(account, lastSnapshotId);
     }
 
     function getTotalSupplyAtLastSnapshot() external view returns (uint256) {
-        return totalSupplyAt(_lastSnapshotId);
+        return totalSupplyAt(lastSnapshotId);
     }
 }

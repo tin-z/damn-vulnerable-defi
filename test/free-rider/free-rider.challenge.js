@@ -5,56 +5,55 @@ const routerJson = require("@uniswap/v2-periphery/build/UniswapV2Router02.json")
 
 const { ethers } = require('hardhat');
 const { expect } = require('chai');
-const { setBalance } = require("@nomicfoundation/hardhat-network-helpers");
 
 describe('[Challenge] Free Rider', function () {
-    let deployer, player, devs;
-    let weth, token, uniswapFactory, uniswapRouter, uniswapPair, marketplace, nft, devsContract;
+    let deployer, attacker, buyer;
 
     // The NFT marketplace will have 6 tokens, at 15 ETH each
-    const NFT_PRICE = 15n * 10n ** 18n;
+    const NFT_PRICE = ethers.utils.parseEther('15')
     const AMOUNT_OF_NFTS = 6;
-    const MARKETPLACE_INITIAL_ETH_BALANCE = 90n * 10n ** 18n;
-    
-    const PLAYER_INITIAL_ETH_BALANCE = 1n * 10n ** 17n;
+    const MARKETPLACE_INITIAL_ETH_BALANCE = ethers.utils.parseEther('90');
 
-    const BOUNTY = 45n * 10n ** 18n;
+    // The buyer will offer 45 ETH as payout for the job
+    const BUYER_PAYOUT = ethers.utils.parseEther('45');
 
     // Initial reserves for the Uniswap v2 pool
-    const UNISWAP_INITIAL_TOKEN_RESERVE = 15000n * 10n ** 18n;
-    const UNISWAP_INITIAL_WETH_RESERVE = 9000n * 10n ** 18n;
+    const UNISWAP_INITIAL_TOKEN_RESERVE = ethers.utils.parseEther('15000');
+    const UNISWAP_INITIAL_WETH_RESERVE = ethers.utils.parseEther('9000');
 
     before(async function () {
         /** SETUP SCENARIO - NO NEED TO CHANGE ANYTHING HERE */
-        [deployer, player, devs] = await ethers.getSigners();
+        [deployer, attacker, buyer] = await ethers.getSigners();
 
-        // Player starts with limited ETH balance
-        setBalance(player.address, PLAYER_INITIAL_ETH_BALANCE);
-        expect(await ethers.provider.getBalance(player.address)).to.eq(PLAYER_INITIAL_ETH_BALANCE);
+        // Attacker starts with little ETH balance
+        await ethers.provider.send("hardhat_setBalance", [
+            attacker.address,
+            "0x6f05b59d3b20000", // 0.5 ETH
+        ]);
 
-        // Deploy WETH
-        weth = await (await ethers.getContractFactory('WETH', deployer)).deploy();
+        // Deploy WETH contract
+        this.weth = await (await ethers.getContractFactory('WETH9', deployer)).deploy();
 
         // Deploy token to be traded against WETH in Uniswap v2
-        token = await (await ethers.getContractFactory('DamnValuableToken', deployer)).deploy();
+        this.token = await (await ethers.getContractFactory('DamnValuableToken', deployer)).deploy();
 
         // Deploy Uniswap Factory and Router
-        uniswapFactory = await (new ethers.ContractFactory(factoryJson.abi, factoryJson.bytecode, deployer)).deploy(
+        this.uniswapFactory = await (new ethers.ContractFactory(factoryJson.abi, factoryJson.bytecode, deployer)).deploy(
             ethers.constants.AddressZero // _feeToSetter
         );
-        uniswapRouter = await (new ethers.ContractFactory(routerJson.abi, routerJson.bytecode, deployer)).deploy(
-            uniswapFactory.address,
-            weth.address
+        this.uniswapRouter = await (new ethers.ContractFactory(routerJson.abi, routerJson.bytecode, deployer)).deploy(
+            this.uniswapFactory.address,
+            this.weth.address
         );
         
         // Approve tokens, and then create Uniswap v2 pair against WETH and add liquidity
-        // The function takes care of deploying the pair automatically
-        await token.approve(
-            uniswapRouter.address,
+        // Note that the function takes care of deploying the pair automatically
+        await this.token.approve(
+            this.uniswapRouter.address,
             UNISWAP_INITIAL_TOKEN_RESERVE
         );
-        await uniswapRouter.addLiquidityETH(
-            token.address,                                              // token to be traded against WETH
+        await this.uniswapRouter.addLiquidityETH(
+            this.token.address,                                         // token to be traded against WETH
             UNISWAP_INITIAL_TOKEN_RESERVE,                              // amountTokenDesired
             0,                                                          // amountTokenMin
             0,                                                          // amountETHMin
@@ -64,67 +63,67 @@ describe('[Challenge] Free Rider', function () {
         );
         
         // Get a reference to the created Uniswap pair
-        uniswapPair = await (new ethers.ContractFactory(pairJson.abi, pairJson.bytecode, deployer)).attach(
-            await uniswapFactory.getPair(token.address, weth.address)
+        const UniswapPairFactory = new ethers.ContractFactory(pairJson.abi, pairJson.bytecode, deployer);
+        this.uniswapPair = await UniswapPairFactory.attach(
+            await this.uniswapFactory.getPair(this.token.address, this.weth.address)
         );
-        expect(await uniswapPair.token0()).to.eq(weth.address);
-        expect(await uniswapPair.token1()).to.eq(token.address);
-        expect(await uniswapPair.balanceOf(deployer.address)).to.be.gt(0);
+        expect(await this.uniswapPair.token0()).to.eq(this.weth.address);
+        expect(await this.uniswapPair.token1()).to.eq(this.token.address);
+        expect(await this.uniswapPair.balanceOf(deployer.address)).to.be.gt('0');
 
         // Deploy the marketplace and get the associated ERC721 token
         // The marketplace will automatically mint AMOUNT_OF_NFTS to the deployer (see `FreeRiderNFTMarketplace::constructor`)
-        marketplace = await (await ethers.getContractFactory('FreeRiderNFTMarketplace', deployer)).deploy(
+        this.marketplace = await (await ethers.getContractFactory('FreeRiderNFTMarketplace', deployer)).deploy(
             AMOUNT_OF_NFTS,
             { value: MARKETPLACE_INITIAL_ETH_BALANCE }
         );
 
         // Deploy NFT contract
-        nft = await (await ethers.getContractFactory('DamnValuableNFT', deployer)).attach(await marketplace.token());
-        expect(await nft.owner()).to.eq(ethers.constants.AddressZero); // ownership renounced
-        expect(await nft.rolesOf(marketplace.address)).to.eq(await nft.MINTER_ROLE());
+        const DamnValuableNFTFactory = await ethers.getContractFactory('DamnValuableNFT', deployer);
+        this.nft = await DamnValuableNFTFactory.attach(await this.marketplace.token());
 
-        // Ensure deployer owns all minted NFTs. Then approve the marketplace to trade them.
+        // Ensure deployer owns all minted NFTs and approve the marketplace to trade them
         for (let id = 0; id < AMOUNT_OF_NFTS; id++) {
-            expect(await nft.ownerOf(id)).to.be.eq(deployer.address);
+            expect(await this.nft.ownerOf(id)).to.be.eq(deployer.address);
         }
-        await nft.setApprovalForAll(marketplace.address, true);
+        await this.nft.setApprovalForAll(this.marketplace.address, true);
 
         // Open offers in the marketplace
-        await marketplace.offerMany(
+        await this.marketplace.offerMany(
             [0, 1, 2, 3, 4, 5],
             [NFT_PRICE, NFT_PRICE, NFT_PRICE, NFT_PRICE, NFT_PRICE, NFT_PRICE]
         );
-        expect(await marketplace.offersCount()).to.be.eq(6);
+        expect(await this.marketplace.amountOfOffers()).to.be.eq('6');
 
-        // Deploy devs' contract, adding the player as the beneficiary
-        devsContract = await (await ethers.getContractFactory('FreeRiderRecovery', devs)).deploy(
-            player.address, // beneficiary
-            nft.address, 
-            { value: BOUNTY }
+        // Deploy buyer's contract, adding the attacker as the partner
+        this.buyerContract = await (await ethers.getContractFactory('FreeRiderBuyer', buyer)).deploy(
+            attacker.address, // partner
+            this.nft.address, 
+            { value: BUYER_PAYOUT }
         );
     });
 
-    it('Execution', async function () {
-        /** CODE YOUR SOLUTION HERE */
+    it('Exploit', async function () {
+        /** CODE YOUR EXPLOIT HERE */
     });
 
     after(async function () {
-        /** SUCCESS CONDITIONS - NO NEED TO CHANGE ANYTHING HERE */
+        /** SUCCESS CONDITIONS */
 
-        // The devs extract all NFTs from its associated contract
+        // Attacker must have earned all ETH from the payout
+        expect(await ethers.provider.getBalance(attacker.address)).to.be.gt(BUYER_PAYOUT);
+        expect(await ethers.provider.getBalance(this.buyerContract.address)).to.be.eq('0');
+
+        // The buyer extracts all NFTs from its associated contract
         for (let tokenId = 0; tokenId < AMOUNT_OF_NFTS; tokenId++) {
-            await nft.connect(devs).transferFrom(devsContract.address, devs.address, tokenId);
-            expect(await nft.ownerOf(tokenId)).to.be.eq(devs.address);
+            await this.nft.connect(buyer).transferFrom(this.buyerContract.address, buyer.address, tokenId);
+            expect(await this.nft.ownerOf(tokenId)).to.be.eq(buyer.address);
         }
 
         // Exchange must have lost NFTs and ETH
-        expect(await marketplace.offersCount()).to.be.eq(0);
+        expect(await this.marketplace.amountOfOffers()).to.be.eq('0');
         expect(
-            await ethers.provider.getBalance(marketplace.address)
+            await ethers.provider.getBalance(this.marketplace.address)
         ).to.be.lt(MARKETPLACE_INITIAL_ETH_BALANCE);
-
-        // Player must have earned all ETH
-        expect(await ethers.provider.getBalance(player.address)).to.be.gt(BOUNTY);
-        expect(await ethers.provider.getBalance(devsContract.address)).to.be.eq(0);
     });
 });
